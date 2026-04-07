@@ -1,0 +1,17 @@
+{
+  "crop_size": {
+    "height": 512,
+    "width": 512
+  },
+  "do_center_crop": false,
+  "do_convert_rgb": true,
+  "do_normalize": false,
+  "do_rescale": true,
+  "do_resize": false,  
+  "image_processor_type": "CLIPImageProcessor",  
+  "processor_class": "CLIPProcessor",
+  "resample": 3,
+  "size": {
+    "shortest_edge": 512
+  }
+}
