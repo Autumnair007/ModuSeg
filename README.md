@@ -1,4 +1,4 @@
-# ModuSeg: Decoupling Object Discovery and Semantic Retrieval for Training-Free Weakly Supervised Segmentation [![arXiv](https://img.shields.io/badge/arXiv-TBD-b31b1b.svg)](TBD)
+# ModuSeg: Decoupling Object Discovery and Semantic Retrieval for Training-Free Weakly Supervised Segmentation [![arXiv](https://img.shields.io/badge/arXiv-2604.07021-b31b1b.svg)](https://arxiv.org/abs/2604.07021)
 
 We propose ModuSeg, a training-free weakly supervised semantic segmentation framework that explicitly decouples object discovery and semantic retrieval for high-quality pixel-level predictions.
 
@@ -322,7 +322,18 @@ Semantic segmentation performance on PASCAL VOC 2012 and MS COCO 2014.
 
 ## Citation
 
-If you have any questions, please feel free to contact the author at 202230430064@mail.scut.edu.cn.
+If you find our work useful for your research, please consider citing:
+
+```bibtex
+@article{he2026moduseg,
+  title={ModuSeg: Decoupling object discovery and semantic retrieval for training-free weakly supervised segmentation},
+  author={He, Qingze and Liu, Fagui and Zhang, Dengke and Wei, Qingmao and Tang, Quan},
+  journal={arXiv preprint arXiv:2604.07021},
+  year={2026}
+}
+```
+
+If you have any questions, please feel free to open an issue or contact the author at 202230430064@mail.scut.edu.cn.
 
 ---
 
