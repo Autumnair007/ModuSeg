@@ -83,6 +83,8 @@ class CorrCLIPMaskGenerator:
             seg_np = torch.as_tensor(seg_pred).detach().cpu().numpy()
 
         seg_np = np.squeeze(seg_np).astype(np.int64)
+        if DATASET_TYPE in ("ade20k", "cityscapes"):
+            seg_np = seg_np + 1
         return seg_np
 
 

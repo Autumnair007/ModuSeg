@@ -9,6 +9,7 @@ import numpy as np
 from configs.config import (
     FEATURES_DIR, INDEX_DIR, META_DIR, DATASET_CLASSES,
 )
+from src.feature_bank_storage import save_feature_matrix_npz
 
 
 
@@ -123,7 +124,7 @@ class FeatureBank:
         print(f"\nSaved statistics to {stats_path}")
 
     def build_indices(self):
-        """Build FAISS indices from disk .npy files and pack into .npz."""
+        """Build FAISS indices from disk .npy files and pack matrix-format .npz."""
         import faiss
         from pathlib import Path
         from tqdm import tqdm
@@ -137,19 +138,19 @@ class FeatureBank:
         for cls_dir in tqdm(class_dirs, desc="Processing classes"):
             cls_name = cls_dir.name
 
-            npy_files = list(cls_dir.glob("*.npy"))
+            npy_files = sorted(cls_dir.glob("*.npy"))
             if not npy_files:
                 continue
             
             feat_list = []
-            all_features = {}
+            sample_ids = []
 
             for npy_file in npy_files:
                 try:
                     feat = np.load(npy_file)
                     if len(feat.shape) == 1 and feat.shape[0] > 0:
                         feat_list.append(feat)
-                        all_features[npy_file.stem] = feat
+                        sample_ids.append(npy_file.stem)
                 except Exception:
                     pass
             
@@ -162,9 +163,9 @@ class FeatureBank:
             index.add(X)
             index_path = os.path.join(INDEX_DIR, f"faiss_{cls_name}.index")
             faiss.write_index(index, index_path)
-            # Pack into .npz and remove .npy files
+            # Pack into matrix-format .npz and remove .npy files
             npz_path = cls_dir / f"{cls_name}_features.npz"
-            np.savez_compressed(npz_path, **all_features)
+            save_feature_matrix_npz(npz_path, X, sample_ids)
             
             # Remove original .npy files
             for npy_file in npy_files:

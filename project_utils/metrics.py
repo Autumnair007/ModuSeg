@@ -13,6 +13,7 @@ def evaluate_dataset_miou(
     gt_list: List[np.ndarray],
     num_classes: int,
     ignore_index: int,
+    class_names=None,
 ):
     """Compute mIoU using torchmetrics."""
     try:
@@ -41,7 +42,8 @@ def evaluate_dataset_miou(
 
     summary_lines = [f"mIoU: {results['mIoU']:.4f}"]
     summary_lines.append("\nPer-class IoU:")
-    class_names = ["background"] + DATASET_CLASSES
+    if class_names is None:
+        class_names = ["background"] + DATASET_CLASSES
     for i, iou_val in enumerate(per_class_iou.cpu().numpy()):
         if i < len(class_names):
             summary_lines.append(f"  {class_names[i]}: {iou_val:.4f}")

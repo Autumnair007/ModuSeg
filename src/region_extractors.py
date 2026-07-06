@@ -34,6 +34,9 @@ def _extract_class_regions(seg_map: np.ndarray, min_area: int, kernel):
         if mask_c.sum() >= min_area:
             regions.append({"cls_id": cid, "mask": mask_c})
 
+    if DATASET_TYPE in ("ade20k", "cityscapes"):
+        return regions
+
     bg = _erode_if_enabled((seg_map == 0).astype(np.uint8), kernel)
     if bg.sum() >= min_area:
         regions.append({"cls_id": 0, "mask": bg})
@@ -55,13 +58,15 @@ def get_regions_from_pseudo(img_path: str, min_area: int = MIN_MASK_AREA):
 
     if DATASET_TYPE == "coco":
         pseudo_path = pseudo_root / DATASET_TRAIN_SPLIT / f"{img_path.name.replace('.jpg', '.png')}"
+    elif DATASET_TYPE in ("ade20k", "cityscapes"):
+        pseudo_path = pseudo_root / DATASET_TRAIN_SPLIT / f"{img_path.stem}.png"
     else:
         pseudo_path = pseudo_root / f"{img_path.stem}.png"
 
     if not pseudo_path.is_file():
         raise FileNotFoundError(
             f"Pseudo mask not found: {pseudo_path}\n"
-            f"Run: python tools/generate_pseudo_masks.py --dataset {DATASET_TYPE} --model {PSEUDO_MASK_ROOT.split('/')[-1]}"
+            f"Run: python tools/generate_pseudo_masks.py --dataset {DATASET_TYPE}"
         )
 
     pseudo_mask = np.array(Image.open(pseudo_path))

@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.Mask_generator_CorrCLIP import CorrCLIPMaskGenerator
+from src.mask_generator_corrclip import CorrCLIPMaskGenerator
 from src.feature_extractor_c_radiov4 import CRADIOv4FeatureExtractor
 from src.filter_stage import run_filter_stage
 from project_utils.config_logger import record_config
@@ -32,7 +32,7 @@ def main():
     print("=" * 80)
     print(f"Feature Bank Build - {DATASET_TYPE.upper()}")
     set_global_seed(SEED)
-    record_config(META_DIR, 'build_demo.py')
+    record_config(META_DIR, 'run_build_feature_bank.py')
 
     # Check for pre-generated pseudo masks
     has_pseudo_masks = False
@@ -115,7 +115,43 @@ def main():
                 if img_path.is_file():
                     image_paths.append(img_path)
             print(f"Loaded {len(image_paths)} train images from SegmentationClass/train2014")
-        
+
+    elif DATASET_TYPE == "ade20k":
+        from configs.config import IMAGELEVEL_JSON_PATH
+
+        if Path(IMAGELEVEL_JSON_PATH).is_file():
+            with open(IMAGELEVEL_JSON_PATH, 'r') as f:
+                imagelevel_data = json.load(f)
+
+            image_paths = []
+            for img_info in imagelevel_data['images']:
+                img_path = dataset_root / img_info['file_name']
+                if img_path.is_file():
+                    image_paths.append(img_path)
+            print(f"Loaded {len(image_paths)} ADE20K train images from {IMAGELEVEL_JSON_PATH}")
+        else:
+            image_dir = dataset_root / 'images' / 'training'
+            image_paths = sorted(image_dir.glob("*.jpg"))
+            print(f"Loaded {len(image_paths)} ADE20K train images from {image_dir}")
+
+    elif DATASET_TYPE == "cityscapes":
+        from configs.config import IMAGELEVEL_JSON_PATH
+
+        if Path(IMAGELEVEL_JSON_PATH).is_file():
+            with open(IMAGELEVEL_JSON_PATH, 'r') as f:
+                imagelevel_data = json.load(f)
+
+            image_paths = []
+            for img_info in imagelevel_data['images']:
+                img_path = dataset_root / img_info['file_name']
+                if img_path.is_file():
+                    image_paths.append(img_path)
+            print(f"Loaded {len(image_paths)} CityScapes train images from {IMAGELEVEL_JSON_PATH}")
+        else:
+            image_dir = dataset_root / 'leftImg8bit' / 'train'
+            image_paths = sorted(image_dir.glob("*/*_leftImg8bit.png"))
+            print(f"Loaded {len(image_paths)} CityScapes train images from {image_dir}")
+
     else:
         # VOC: read from ImageSets/Segmentation/train.txt
         jpeg_dir = dataset_root / 'JPEGImages'

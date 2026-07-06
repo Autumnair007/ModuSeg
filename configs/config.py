@@ -12,7 +12,7 @@ class ConfigDefaults:
     """Default configuration values (single source of truth)."""
     # Base
     SEED = 42
-    DATASET_TYPE = "voc"  # "voc" | "coco"
+    DATASET_TYPE = "voc"  # "voc" | "coco" | "ade20k" | "cityscapes"
     FEATURE_BACKBONE = "c-radiov4"
     NUM_WORKERS = 8
 
@@ -30,7 +30,7 @@ class ConfigDefaults:
     INF_TOPK_NEIGH = 25
     INF_FAISS_USE_GPU = True
     INF_FAISS_DEVICE = 0
-    INF_FAISS_DETERMINISTIC = True
+    INF_FAISS_EXACT_SEARCH_THRESHOLD = 100000
     INF_ENTITYSEG_SCORE_THR = 0.6
 
     # Model
@@ -82,7 +82,9 @@ INF_TOPK_NEIGH = env_get_int("OVERRIDE_INF_TOPK_NEIGH", _D.INF_TOPK_NEIGH)
 INF_USE_FAISS = True
 INF_FAISS_USE_GPU = env_get_bool("OVERRIDE_INF_FAISS_USE_GPU", _D.INF_FAISS_USE_GPU)
 INF_FAISS_DEVICE = env_get_int("OVERRIDE_INF_FAISS_DEVICE", _D.INF_FAISS_DEVICE)
-INF_FAISS_DETERMINISTIC = env_get_bool("OVERRIDE_INF_FAISS_DETERMINISTIC", _D.INF_FAISS_DETERMINISTIC)
+INF_FAISS_EXACT_SEARCH_THRESHOLD = env_get_int(
+    "OVERRIDE_INF_FAISS_EXACT_SEARCH_THRESHOLD", _D.INF_FAISS_EXACT_SEARCH_THRESHOLD
+)
 
 INF_ENTITYSEG_CFG = "mask2former_hornet_3x.yaml"
 INF_ENTITYSEG_CKPT = os.path.join('pretrain_model', 'Mask2Former_hornet_3x_576d0b.pth')
@@ -113,6 +115,14 @@ from configs.config_helpers import load_classes
 
 CLS_VOC21_PATH = os.path.join('configs', 'cls_voc21.txt')
 CLS_COCO_PATH = os.path.join('configs', 'cls_coco_object.txt')
+CLS_ADE20K_PATH = os.path.join('configs', 'cls_ade20k.txt')
+CLS_CITYSCAPES_PATH = os.path.join('configs', 'cls_city_scapes.txt')
+
+
+def _load_classes_no_background(name_file: str):
+    """Load class names from a file without a background line."""
+    with open(name_file, "r", encoding="utf-8") as f:
+        return [line.strip().split(";")[0].strip() for line in f if line.strip()]
 
 if DATASET_TYPE == "coco":
     COCO_ROOT = 'data/COCO2014'
@@ -134,6 +144,46 @@ if DATASET_TYPE == "coco":
     NUM_CLASSES = COCO_NUM_CLASSES
     IMAGELEVEL_JSON_PATH = COCO_IMAGELEVEL_TRAIN_JSON
     OUTPUT_ROOT = env_get_str("OVERRIDE_OUTPUT_ROOT", COCO_OUTPUT_ROOT)
+elif DATASET_TYPE == "ade20k":
+    ADE20K_ROOT = "data/ADEChallengeData2016"
+    ADE20K_TRAIN_SPLIT = "training"
+    ADE20K_VAL_SPLIT = "validation"
+    ADE20K_CLASSES = _load_classes_no_background(CLS_ADE20K_PATH)
+    if len(ADE20K_CLASSES) != 150:
+        raise ValueError(f"ADE20K class file must contain 150 classes, got {len(ADE20K_CLASSES)}")
+    ADE20K_NUM_CLASSES = len(ADE20K_CLASSES) + 1
+    ADE20K_IMAGELEVEL_TRAIN_JSON = os.path.join(ADE20K_ROOT, 'ImageSets', 'ImageLevel', 'train_imagelevel.json')
+    ADE20K_IMAGELEVEL_VAL_JSON = os.path.join(ADE20K_ROOT, 'ImageSets', 'ImageLevel', 'val_imagelevel.json')
+    ADE20K_OUTPUT_ROOT = os.environ.get("OVERRIDE_ADE20K_OUTPUT_ROOT", "feature_bank_ade20k")
+
+    DATASET_ROOT = ADE20K_ROOT
+    DATASET_TRAIN_SPLIT = ADE20K_TRAIN_SPLIT
+    DATASET_VAL_SPLIT = ADE20K_VAL_SPLIT
+    CLS_PATH = CLS_ADE20K_PATH
+    DATASET_CLASSES = ADE20K_CLASSES
+    NUM_CLASSES = ADE20K_NUM_CLASSES
+    IMAGELEVEL_JSON_PATH = ADE20K_IMAGELEVEL_TRAIN_JSON
+    OUTPUT_ROOT = env_get_str("OVERRIDE_OUTPUT_ROOT", ADE20K_OUTPUT_ROOT)
+elif DATASET_TYPE == "cityscapes":
+    CITYSCAPES_ROOT = "data/CityScapes"
+    CITYSCAPES_TRAIN_SPLIT = "train"
+    CITYSCAPES_VAL_SPLIT = "val"
+    CITYSCAPES_CLASSES = _load_classes_no_background(CLS_CITYSCAPES_PATH)
+    if len(CITYSCAPES_CLASSES) != 19:
+        raise ValueError(f"CityScapes class file must contain 19 classes, got {len(CITYSCAPES_CLASSES)}")
+    CITYSCAPES_NUM_CLASSES = len(CITYSCAPES_CLASSES) + 1
+    CITYSCAPES_IMAGELEVEL_TRAIN_JSON = os.path.join(CITYSCAPES_ROOT, 'ImageSets', 'ImageLevel', 'train_imagelevel.json')
+    CITYSCAPES_IMAGELEVEL_VAL_JSON = os.path.join(CITYSCAPES_ROOT, 'ImageSets', 'ImageLevel', 'val_imagelevel.json')
+    CITYSCAPES_OUTPUT_ROOT = os.environ.get("OVERRIDE_CITYSCAPES_OUTPUT_ROOT", "feature_bank_cityscapes")
+
+    DATASET_ROOT = CITYSCAPES_ROOT
+    DATASET_TRAIN_SPLIT = CITYSCAPES_TRAIN_SPLIT
+    DATASET_VAL_SPLIT = CITYSCAPES_VAL_SPLIT
+    CLS_PATH = CLS_CITYSCAPES_PATH
+    DATASET_CLASSES = CITYSCAPES_CLASSES
+    NUM_CLASSES = CITYSCAPES_NUM_CLASSES
+    IMAGELEVEL_JSON_PATH = CITYSCAPES_IMAGELEVEL_TRAIN_JSON
+    OUTPUT_ROOT = env_get_str("OVERRIDE_OUTPUT_ROOT", CITYSCAPES_OUTPUT_ROOT)
 else:
     DATASET_ROOT = "data/VOC2012"
     DATASET_TRAIN_SPLIT = "train"
@@ -142,7 +192,7 @@ else:
     DATASET_CLASSES = load_classes(CLS_VOC21_PATH)
     NUM_CLASSES = 21
     IMAGELEVEL_JSON_PATH = os.path.join(DATASET_ROOT, 'ImageSets', 'ImageLevel', 'train_imagelevel.json')
-    OUTPUT_ROOT = env_get_str("OVERRIDE_OUTPUT_ROOT", "feature_bank")
+    OUTPUT_ROOT = env_get_str("OVERRIDE_OUTPUT_ROOT", "feature_bank_voc")
 
 # Image-level label JSON key names
 IMAGELEVEL_IMG_ID_KEY = "img_id"

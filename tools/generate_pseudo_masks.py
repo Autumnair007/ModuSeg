@@ -7,10 +7,14 @@ Image-level label filtering is always enabled.
 Output layout:
     VOC:  data/VOC2012/pseudo/corrclip/{img_id}.png
     COCO: data/COCO2014/pseudo/corrclip/{split}/{img_id}.png
+    ADE:  data/ADEChallengeData2016/pseudo/corrclip/{split}/{img_id}.png
+    Cityscapes: data/CityScapes/pseudo/corrclip/{split}/{img_id}.png
 
 Usage:
     python tools/generate_pseudo_masks.py --dataset voc
     python tools/generate_pseudo_masks.py --dataset coco --split train2014
+    python tools/generate_pseudo_masks.py --dataset ade20k --split training
+    python tools/generate_pseudo_masks.py --dataset cityscapes --split train
 """
 
 import os
@@ -29,18 +33,23 @@ from torchvision import transforms
 
 from corrclip_segmentor import CorrCLIPSegmentation
 from configs.config import CORRCLIP_CLIP_TYPE, CORRCLIP_MODEL_TYPE, CORRCLIP_DINO_TYPE, CORRCLIP_MASK_BACKEND
+from project_utils.imagelevel_utils import load_imagelevel_labels
 
 # ---------------------------------------------------------------------------
 # Configurable paths (edit these if your layout differs)
 # ---------------------------------------------------------------------------
 VOC_ROOT = Path('data/VOC2012')
 COCO_ROOT = Path('data/COCO2014')
+ADE20K_ROOT = Path('data/ADEChallengeData2016')
+CITYSCAPES_ROOT = Path('data/CityScapes')
 
 # Pseudo mask output directory name under {dataset_root}/pseudo/
 PSEUDO_SUBDIR = 'corrclip'
 
 VOC_CLASS_CONFIG = 'configs/cls_voc21.txt'
 COCO_CLASS_CONFIG = 'configs/cls_coco_object.txt'
+ADE20K_CLASS_CONFIG = 'configs/cls_ade20k.txt'
+CITYSCAPES_CLASS_CONFIG = 'configs/cls_city_scapes.txt'
 
 
 class PseudoMaskGenerator:
@@ -59,6 +68,14 @@ class PseudoMaskGenerator:
             self.dataset_root = COCO_ROOT
             self.name_file = COCO_CLASS_CONFIG
             self.imagelevel_json = self.dataset_root / 'annotations' / 'train_imagelevel.json'
+        elif self.dataset_type == 'ade20k':
+            self.dataset_root = ADE20K_ROOT
+            self.name_file = ADE20K_CLASS_CONFIG
+            self.imagelevel_json = self.dataset_root / 'ImageSets' / 'ImageLevel' / 'train_imagelevel.json'
+        elif self.dataset_type == 'cityscapes':
+            self.dataset_root = CITYSCAPES_ROOT
+            self.name_file = CITYSCAPES_CLASS_CONFIG
+            self.imagelevel_json = self.dataset_root / 'ImageSets' / 'ImageLevel' / 'train_imagelevel.json'
         else:
             raise ValueError(f"Unsupported dataset type: {dataset_type}")
 
@@ -100,9 +117,18 @@ class PseudoMaskGenerator:
         """Get image paths from image-level label JSON."""
         if self.dataset_type == 'voc':
             imagelevel_file = self.dataset_root / 'ImageSets' / 'ImageLevel' / f'{split}_imagelevel.json'
-        else:  # coco
+        elif self.dataset_type == 'coco':
             split_name = 'train' if 'train' in split else 'val'
             imagelevel_file = self.dataset_root / 'annotations' / f'{split_name}_imagelevel.json'
+        elif self.dataset_type == 'ade20k':
+            split_dir = self._normalize_ade20k_split(split)
+            split_name = 'train' if split_dir == 'training' else 'val'
+            imagelevel_file = self.dataset_root / 'ImageSets' / 'ImageLevel' / f'{split_name}_imagelevel.json'
+        elif self.dataset_type == 'cityscapes':
+            split_dir = self._normalize_cityscapes_split(split)
+            imagelevel_file = self.dataset_root / 'ImageSets' / 'ImageLevel' / f'{split_dir}_imagelevel.json'
+        else:
+            raise ValueError(f"Unsupported dataset type: {self.dataset_type}")
 
         if not imagelevel_file.exists():
             raise FileNotFoundError(f"Image-level label file not found: {imagelevel_file}")
@@ -117,8 +143,19 @@ class PseudoMaskGenerator:
                 raise FileNotFoundError(f"Image not found: {img_path}")
             img_paths.append(img_path)
 
+        self.imagelevel_json = imagelevel_file
         print(f"Loaded {len(img_paths)} images from {imagelevel_file}")
         return img_paths
+
+    def _sync_imagelevel_filter(self):
+        """Update CorrCLIP image-level filtering when a non-default split is used."""
+        if not getattr(self.model, "use_imagelevel_filter", False):
+            return
+        json_path = str(self.imagelevel_json)
+        if getattr(self.model, "imagelevel_json_path", None) == json_path:
+            return
+        self.model.imagelevel_json_path = json_path
+        self.model.imagelevel_labels = load_imagelevel_labels(json_path=json_path)
 
     @torch.inference_mode()
     def generate_mask(self, img_path):
@@ -133,6 +170,8 @@ class PseudoMaskGenerator:
             seg_np = seg_pred.squeeze().detach().cpu().numpy().astype(np.uint8)
         else:
             seg_np = np.array(seg_pred).astype(np.uint8)
+        if self.dataset_type in ('ade20k', 'cityscapes'):
+            seg_np = (seg_np.astype(np.uint16) + 1).astype(np.uint8)
         return seg_np
 
     def save_mask(self, mask, img_path, split='train'):
@@ -141,10 +180,12 @@ class PseudoMaskGenerator:
         filename = f'{img_path.stem}.png'
 
         if self.dataset_type == 'coco':
-            # COCO: {output_dir}/{split}/{filename}
             output_path = self.output_dir / split / filename
+        elif self.dataset_type == 'ade20k':
+            output_path = self.output_dir / self._normalize_ade20k_split(split) / filename
+        elif self.dataset_type == 'cityscapes':
+            output_path = self.output_dir / self._normalize_cityscapes_split(split) / filename
         else:
-            # VOC: {output_dir}/{filename}
             output_path = self.output_dir / filename
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,6 +195,7 @@ class PseudoMaskGenerator:
     def generate_all(self, split='train', resume=True):
         """Batch-generate pseudo masks for all images in a split."""
         img_paths = self.get_image_list(split)
+        self._sync_imagelevel_filter()
         print(f"\nGenerating pseudo masks for {len(img_paths)} images (split={split})...")
 
         success_count = 0
@@ -165,6 +207,10 @@ class PseudoMaskGenerator:
                 if resume:
                     if self.dataset_type == 'coco':
                         output_path = self.output_dir / split / f'{img_path.stem}.png'
+                    elif self.dataset_type == 'ade20k':
+                        output_path = self.output_dir / self._normalize_ade20k_split(split) / f'{img_path.stem}.png'
+                    elif self.dataset_type == 'cityscapes':
+                        output_path = self.output_dir / self._normalize_cityscapes_split(split) / f'{img_path.stem}.png'
                     else:
                         output_path = self.output_dir / f'{img_path.stem}.png'
                     if output_path.exists():
@@ -186,13 +232,31 @@ class PseudoMaskGenerator:
         print(f"  Output:  {self.output_dir}")
         print("=" * 80)
 
+    @staticmethod
+    def _normalize_ade20k_split(split: str) -> str:
+        split = str(split).lower()
+        if split in {"train", "training"}:
+            return "training"
+        if split in {"val", "validation"}:
+            return "validation"
+        return split
+
+    @staticmethod
+    def _normalize_cityscapes_split(split: str) -> str:
+        split = str(split).lower()
+        if split in {"train", "training"}:
+            return "train"
+        if split in {"val", "validation"}:
+            return "val"
+        return split
+
 
 def main():
     parser = argparse.ArgumentParser(description='Generate CorrCLIP pseudo masks')
-    parser.add_argument('--dataset', type=str, default='voc', choices=['voc', 'coco'],
-                        help='Dataset type (voc or coco)')
+    parser.add_argument('--dataset', type=str, default='voc', choices=['voc', 'coco', 'ade20k', 'cityscapes'],
+                        help='Dataset type (voc, coco, ade20k, or cityscapes)')
     parser.add_argument('--split', type=str, default='train',
-                        help='Split (VOC: train/val, COCO: train2014/val2014)')
+                        help='Split (VOC: train/val, COCO: train2014/val2014, ADE20K: training/validation, Cityscapes: train/val)')
     parser.add_argument('--no-resume', action='store_true',
                         help='Disable resume, regenerate all masks')
 

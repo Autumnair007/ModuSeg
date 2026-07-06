@@ -8,6 +8,7 @@ from configs.config import (
     FILTER_FOREGROUND_DROP_RATIO,
     FILTER_BACKGROUND_DROP_RATIO,
 )
+from src.feature_bank_storage import load_feature_matrix_npz, save_feature_matrix_npz
 
 
 FEATURE_BANK_ROOT = OUTPUT_ROOT
@@ -27,50 +28,15 @@ def _load_class_dirs(features_dir: str):
     return dirs
 
 
-def _load_features_with_files(cls_dir: Path):
-    """Load all feature files from a class directory (.npy and .npz)."""
-    npz_files = list(cls_dir.glob('*.npz'))
-    if npz_files:
-        feats = []
-        keep_files = []
-        for npz_file in npz_files:
-            try:
-                data = np.load(npz_file)
-                for key in sorted(data.keys()):
-                    arr = data[key]
-                    if arr.ndim == 2 and arr.shape[0] == 1:
-                        arr = arr[0]
-                    elif arr.ndim != 1:
-                        arr = arr.reshape(-1)
-                    feats.append(arr.astype(np.float32))
-                    # virtual file path for tracking
-                    keep_files.append(cls_dir / f"{key}.npy")
-            except Exception:
-                continue
-        if len(feats) == 0:
-            return [], np.empty((0,), dtype=np.float32)
-        X = np.stack(feats, axis=0)
-        return keep_files, X
-    
-    # Fallback to .npy files
-    files = [p for p in sorted(cls_dir.glob('*.npy'))]
-    feats = []
-    keep_files = []
-    for f in files:
-        try:
-            arr = np.load(f)
-            if arr.ndim == 2 and arr.shape[0] == 1:
-                arr = arr[0]
-            elif arr.ndim != 1:
-                arr = arr.reshape(-1)
-            feats.append(arr.astype(np.float32))
-            keep_files.append(f)
-        except Exception:
-            continue
-    if len(feats) == 0:
-        return [], np.empty((0,), dtype=np.float32)
-    X = np.stack(feats, axis=0)
-    return keep_files, X
+def _load_features_with_sample_ids(cls_dir: Path):
+    """Load one matrix-format feature file from a class directory."""
+    npz_files = sorted(cls_dir.glob('*.npz'))
+    if not npz_files:
+        return np.array([], dtype=str), np.empty((0,), dtype=np.float32)
+    if len(npz_files) != 1:
+        raise RuntimeError(f"Expected exactly one v2 feature file under {cls_dir}, got {len(npz_files)}")
+    X, sample_ids = load_feature_matrix_npz(npz_files[0])
+    return sample_ids, X
 
 
 def _compute_center_mean(X: np.ndarray) -> np.ndarray:
@@ -80,10 +46,10 @@ def _compute_center_mean(X: np.ndarray) -> np.ndarray:
     return X.mean(axis=0)
 
 
-def _filter_by_top_ratio(files, X, ratio_drop: float):
+def _filter_by_top_ratio(sample_ids, X, ratio_drop: float):
     """Drop the most distant samples by ratio."""
     if X.ndim != 2 or X.shape[0] == 0:
-        return [], X, np.array([]), np.array([])
+        return np.array([], dtype=str), X, np.array([]), np.array([])
     center = _compute_center_mean(X)
     diffs = X - center[None, :]
     dists = np.sqrt((diffs * diffs).sum(axis=1))
@@ -97,8 +63,8 @@ def _filter_by_top_ratio(files, X, ratio_drop: float):
         drop_idx = set(order[:k_drop].tolist())
         keep_idx = np.array([i for i in range(n) if i not in drop_idx], dtype=np.int64)
     X_keep = X[keep_idx]
-    files_keep = [files[i] for i in keep_idx]
-    return files_keep, X_keep, center, dists
+    sample_ids_keep = sample_ids[keep_idx]
+    return sample_ids_keep, X_keep, center, dists
 
 def _build_faiss_index_ip(cls_name: str, X: np.ndarray):
     """Build and save FAISS inner-product index."""
@@ -148,7 +114,7 @@ def run_filter_stage(drop_ratio: float | None = None):
 
     for cls_dir in class_dirs:
         cls_name = cls_dir.name
-        files, X = _load_features_with_files(cls_dir)
+        sample_ids, X = _load_features_with_sample_ids(cls_dir)
         original_count = X.shape[0] if (X.ndim == 2) else 0
         if X.ndim != 2 or X.shape[0] == 0:
             (Path(FEATURES_DIR) / cls_name).mkdir(parents=True, exist_ok=True)
@@ -165,29 +131,20 @@ def run_filter_stage(drop_ratio: float | None = None):
         applied_ratio = FILTER_BACKGROUND_DROP_RATIO if cls_name.startswith(FILTER_BACKGROUND_PREFIX) else fg_ratio_used
         
         # Execute filtering
-        files_keep, X_keep, center, dists = _filter_by_top_ratio(files, X, applied_ratio)
+        sample_ids_keep, X_keep, center, dists = _filter_by_top_ratio(sample_ids, X, applied_ratio)
 
-        # Save filtered features as .npz
+        # Save filtered features as matrix-format .npz
         cls_dir_path = Path(FEATURES_DIR) / cls_name
         cls_dir_path.mkdir(parents=True, exist_ok=True)
-        
-        if len(files_keep) > 0 and X_keep.shape[0] > 0:
-            # Build save dict {filename: feature_vec}
-            features_dict = {}
-            for f_path, feat_vec in zip(files_keep, X_keep):
-                key = Path(f_path).stem
-                features_dict[key] = feat_vec
-            
-            # Save as compressed npz
-            npz_path = cls_dir_path / f"{cls_name}_features.npz"
-            np.savez_compressed(npz_path, **features_dict)
-            
-            # Clean up residual .npy files
-            for p in cls_dir_path.glob('*.npy'):
-                try:
-                    p.unlink()
-                except Exception:
-                    pass
+
+        npz_path = cls_dir_path / f"{cls_name}_features.npz"
+        save_feature_matrix_npz(npz_path, X_keep, sample_ids_keep)
+
+        for p in cls_dir_path.glob('*.npy'):
+            try:
+                p.unlink()
+            except Exception:
+                pass
         
         # Rebuild FAISS index
         class_to_features[cls_name] = X_keep

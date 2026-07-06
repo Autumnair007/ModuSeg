@@ -1,3 +1,13 @@
+# Individual
+data/
+pretrain_model/
+
+feature_bank_voc/
+feature_bank_coco/
+feature_bank_ade20k/
+feature_bank_cityscapes/
+.vscode/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -5,9 +15,11 @@ __pycache__/
 
 # C extensions
 *.so
-
+model.safetensors
 # Distribution / packaging
 .Python
+work_dirs/
+results/
 build/
 develop-eggs/
 dist/

@@ -3,14 +3,18 @@ import os
 import json
 from typing import List, Dict, Any
 from contextlib import nullcontext
+from pathlib import Path
 
 import numpy as np
 import torch
 
+from src.feature_bank_storage import load_feature_matrix_npz
 from src.feature_extractor_c_radiov4 import CRADIOv4FeatureExtractor
 from project_utils.seed_utils import set_global_seed
 from CropFormer.demo_mask2former.demo import get_entityseg
 from configs.config import (
+    INF_USE_FAISS, INF_FAISS_USE_GPU, INF_FAISS_DEVICE, INF_FAISS_EXACT_SEARCH_THRESHOLD,
+    DATASET_TYPE,
     INF_MASK_BACKEND,
     INF_ENTITYSEG_CFG, INF_ENTITYSEG_CKPT,
     INF_INSTANCE_SCORE_THR,
@@ -35,8 +39,9 @@ def init_mask_proposer():
 def load_class_mapping(meta_dir: str):
     """Load class mapping from meta directory."""
     path = os.path.join(meta_dir, 'class_mapping.json')
-    assert os.path.isfile(path), f"Mapping not found: {path}. Please run build_demo.py first."
-    meta = json.load(open(path))
+    assert os.path.isfile(path), f"Mapping not found: {path}. Please run run_build_feature_bank.py first."
+    with open(path, 'r', encoding='utf-8') as f:
+        meta = json.load(f)
     id_to_dirname = {int(k): v for k, v in meta['id_to_dirname'].items()}
     fg_class_names = [id_to_dirname[i] for i in sorted(id_to_dirname.keys()) 
                       if i != 0 and not id_to_dirname[i].startswith('background')]
@@ -46,42 +51,22 @@ def load_class_mapping(meta_dir: str):
 
 
 def load_class_features(features_dir: str, class_names: List[str]):
-    """Load class features (.npz and .npy formats)."""
-    from pathlib import Path
+    """Load matrix-format class features."""
     out = {}
     for name in class_names:
         cls_dir = Path(features_dir) / name
         if not cls_dir.is_dir():
             continue
         
-        npz_files = list(cls_dir.glob('*.npz'))
-        if npz_files:
-            feats = []
-            for npz_file in npz_files:
-                try:
-                    data = np.load(npz_file)
-                    for key in sorted(data.keys()):
-                        arr = data[key].astype(np.float32)
-                        arr = arr.reshape(1, -1)
-                        feats.append(arr)
-                except Exception:
-                    continue
-            if len(feats) > 0:
-                out[name] = np.vstack(feats)
+        npz_files = sorted(cls_dir.glob('*.npz'))
+        if not npz_files:
             continue
-        
-        # Fallback to .npy
-        feats = []
-        for f in cls_dir.iterdir():
-            if f.suffix == '.npy':
-                try:
-                    arr = np.load(f).astype(np.float32)
-                    arr = arr.reshape(1, -1)
-                    feats.append(arr)
-                except Exception:
-                    continue
-        if len(feats) > 0:
-            out[name] = np.vstack(feats)
+        if len(npz_files) != 1:
+            raise RuntimeError(f"Expected exactly one v2 feature file under {cls_dir}, got {len(npz_files)}")
+
+        features, _sample_ids = load_feature_matrix_npz(npz_files[0])
+        if features.shape[0] > 0:
+            out[name] = features
     return out
 
 # ============================================================================
@@ -263,10 +248,241 @@ def rasterize_instances(instances: List[Dict[str, Any]], h: int, w: int) -> np.n
     return sem
 
 
+def reduce_ade20k_gt_for_eval(gt_seg: np.ndarray) -> np.ndarray:
+    """Convert ADE20K GT from 0/1..150 to 255/0..149."""
+    gt = np.asarray(gt_seg).astype(np.int64)
+    out = np.full(gt.shape, 255, dtype=np.int64)
+    valid = (gt >= 1) & (gt <= 150)
+    out[valid] = gt[valid] - 1
+    return out
+
+
+def reduce_ade20k_pred_for_eval(pred_seg: np.ndarray) -> np.ndarray:
+    """Convert internal ADE20K prediction labels from 0..150 to 0..149."""
+    pred = np.asarray(pred_seg).astype(np.int64)
+    return np.clip(pred - 1, 0, 149)
+
+
+_CITYSCAPES_ID_TO_TRAIN_ID = np.full(256, 255, dtype=np.uint8)
+for _label_id, _train_id in {
+    7: 0,
+    8: 1,
+    11: 2,
+    12: 3,
+    13: 4,
+    17: 5,
+    19: 6,
+    20: 7,
+    21: 8,
+    22: 9,
+    23: 10,
+    24: 11,
+    25: 12,
+    26: 13,
+    27: 14,
+    28: 15,
+    31: 16,
+    32: 17,
+    33: 18,
+}.items():
+    _CITYSCAPES_ID_TO_TRAIN_ID[_label_id] = _train_id
+
+
+def cityscapes_image_to_gt_path(img_path: Path, dataset_root: Path) -> Path:
+    """Infer the Cityscapes labelIds path from a leftImg8bit image path."""
+    img_path = Path(img_path)
+    split = img_path.parts[img_path.parts.index("leftImg8bit") + 1]
+    city = img_path.parent.name
+    base = img_path.stem.replace("_leftImg8bit", "")
+    return dataset_root / "gtFine" / split / city / f"{base}_gtFine_labelIds.png"
+
+
+def reduce_cityscapes_gt_for_eval(gt_seg: np.ndarray) -> np.ndarray:
+    """Convert Cityscapes labelIds GT to trainIds 0..18 with 255 ignored."""
+    gt = np.asarray(gt_seg)
+    out = np.full(gt.shape, 255, dtype=np.int64)
+    valid = (gt >= 0) & (gt < len(_CITYSCAPES_ID_TO_TRAIN_ID))
+    out[valid] = _CITYSCAPES_ID_TO_TRAIN_ID[gt[valid].astype(np.int64)].astype(np.int64)
+    return out
+
+
+def reduce_cityscapes_pred_for_eval(pred_seg: np.ndarray) -> np.ndarray:
+    """Convert internal CityScapes labels 1..19 to trainIds 0..18."""
+    pred = np.asarray(pred_seg).astype(np.int64)
+    out = np.full(pred.shape, 255, dtype=np.int64)
+    valid = (pred >= 1) & (pred <= 19)
+    out[valid] = pred[valid] - 1
+    return out
+
+
+def load_eval_samples(dataset_root: str) -> List[Dict[str, str]]:
+    """Load validation samples for the configured dataset."""
+    if DATASET_TYPE == "coco":
+        from configs.config import COCO_IMAGELEVEL_VAL_JSON, COCO_VAL_LIST
+
+        if Path(COCO_IMAGELEVEL_VAL_JSON).is_file():
+            with open(COCO_IMAGELEVEL_VAL_JSON, 'r', encoding='utf-8') as f:
+                val_data = json.load(f)
+            sample_infos = []
+            for img_info in val_data['images']:
+                img_id = img_info['img_id']
+                img_path = os.path.join(dataset_root, img_info['file_name'])
+                gt_filename = os.path.basename(img_info['file_name']).replace('.jpg', '.png')
+                gt_split = 'train2014' if 'train' in img_info['file_name'] else 'val2014'
+                gt_path = os.path.join(dataset_root, 'SegmentationClass', gt_split, gt_filename)
+                sample_infos.append({'id': img_id, 'img': img_path, 'gt': gt_path})
+        elif os.path.isfile(COCO_VAL_LIST):
+            with open(COCO_VAL_LIST, 'r', encoding='utf-8') as f:
+                val_ids = [line.strip() for line in f if line.strip()]
+            sample_infos = []
+            for img_stem in val_ids:
+                img_path = os.path.join(dataset_root, 'images', 'val2014', f'{img_stem}.jpg')
+                gt_path = os.path.join(dataset_root, 'SegmentationClass', 'val2014', f'{img_stem}.png')
+                sample_infos.append({'id': img_stem, 'img': img_path, 'gt': gt_path})
+        else:
+            segclass_dir = os.path.join(dataset_root, 'SegmentationClass', 'val2014')
+            sample_infos = []
+            for gt_file in sorted(Path(segclass_dir).glob('*.png')):
+                img_stem = gt_file.stem
+                img_path = os.path.join(dataset_root, 'images', 'val2014', f'{img_stem}.jpg')
+                sample_infos.append({'id': img_stem, 'img': img_path, 'gt': str(gt_file)})
+        print(f"Loaded {len(sample_infos)} COCO val images")
+        return sample_infos
+
+    if DATASET_TYPE == "ade20k":
+        from configs.config import ADE20K_IMAGELEVEL_VAL_JSON
+
+        sample_infos = []
+        if Path(ADE20K_IMAGELEVEL_VAL_JSON).is_file():
+            with open(ADE20K_IMAGELEVEL_VAL_JSON, 'r', encoding='utf-8') as f:
+                val_data = json.load(f)
+            for img_info in val_data['images']:
+                img_id = img_info['img_id']
+                img_path = os.path.join(dataset_root, img_info['file_name'])
+                gt_path = os.path.join(
+                    dataset_root,
+                    'annotations',
+                    'validation',
+                    f"{Path(img_info['file_name']).stem}.png",
+                )
+                sample_infos.append({'id': img_id, 'img': img_path, 'gt': gt_path})
+        else:
+            image_dir = Path(dataset_root) / 'images' / 'validation'
+            for img_file in sorted(image_dir.glob('*.jpg')):
+                gt_path = Path(dataset_root) / 'annotations' / 'validation' / f'{img_file.stem}.png'
+                sample_infos.append({'id': img_file.stem, 'img': str(img_file), 'gt': str(gt_path)})
+        print(f"Loaded {len(sample_infos)} ADE20K val images")
+        return sample_infos
+
+    if DATASET_TYPE == "cityscapes":
+        from configs.config import CITYSCAPES_IMAGELEVEL_VAL_JSON
+
+        sample_infos = []
+        if Path(CITYSCAPES_IMAGELEVEL_VAL_JSON).is_file():
+            with open(CITYSCAPES_IMAGELEVEL_VAL_JSON, 'r', encoding='utf-8') as f:
+                val_data = json.load(f)
+            for img_info in val_data['images']:
+                img_id = img_info['img_id']
+                img_path = os.path.join(dataset_root, img_info['file_name'])
+                gt_path = os.path.join(dataset_root, img_info['gt_file_name'])
+                sample_infos.append({'id': img_id, 'img': img_path, 'gt': gt_path})
+        else:
+            image_dir = Path(dataset_root) / 'leftImg8bit' / 'val'
+            for img_file in sorted(image_dir.glob('*/*_leftImg8bit.png')):
+                gt_path = cityscapes_image_to_gt_path(img_file, Path(dataset_root))
+                sample_infos.append({'id': img_file.stem, 'img': str(img_file), 'gt': str(gt_path)})
+        print(f"Loaded {len(sample_infos)} CityScapes val images")
+        return sample_infos
+
+    val_list = os.path.join(dataset_root, 'ImageSets', 'Segmentation', 'val.txt')
+    gt_dir = os.path.join(dataset_root, 'SegmentationClassAug')
+    img_dir = os.path.join(dataset_root, 'JPEGImages')
+
+    with open(val_list, 'r', encoding='utf-8') as f:
+        ids = [line.strip() for line in f if line.strip()]
+
+    sample_infos = []
+    for img_id in ids:
+        img_path = os.path.join(img_dir, f'{img_id}.jpg')
+        gt_path = os.path.join(gt_dir, f'{img_id}.png')
+        sample_infos.append({'id': img_id, 'img': img_path, 'gt': gt_path})
+    return sample_infos
+
+
+def build_faiss_index(all_feats: np.ndarray):
+    """Build the optional FAISS search index for gallery features."""
+    if not INF_USE_FAISS:
+        return None
+
+    import faiss
+
+    try:
+        if hasattr(faiss, "set_random_seed"):
+            faiss.set_random_seed(SEED)
+        elif hasattr(faiss, "rand") and hasattr(faiss.rand, "seed"):
+            faiss.rand.seed(SEED)
+        elif hasattr(faiss, "cvar") and hasattr(faiss.cvar, "rand_seed"):
+            faiss.cvar.rand_seed = int(SEED)
+    except Exception:
+        pass
+
+    dim = all_feats.shape[1]
+    n_samples = all_feats.shape[0]
+    use_ivf = n_samples > INF_FAISS_EXACT_SEARCH_THRESHOLD
+
+    if n_samples <= INF_FAISS_EXACT_SEARCH_THRESHOLD:
+        print(f"[FAISS] {n_samples} features <= {INF_FAISS_EXACT_SEARCH_THRESHOLD}: IndexFlatIP (exact search)")
+
+    if INF_FAISS_USE_GPU and faiss.get_num_gpus() > 0:
+        res = faiss.StandardGpuResources()
+        res.setTempMemory(1536 * 1024 * 1024)
+
+        if use_ivf:
+            nlist = min(int(np.sqrt(n_samples)), 1024)
+            print(f"[FAISS] GPU mode: IndexIVFFlat (nlist={nlist})")
+            quantizer = faiss.IndexFlatIP(dim)
+            cpu_index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+            cpu_index.train(all_feats)
+            cpu_index.add(all_feats)
+            cpu_index.nprobe = min(32, nlist)
+            return faiss.index_cpu_to_gpu(res, INF_FAISS_DEVICE, cpu_index)
+
+        print("[FAISS] GPU mode: IndexFlatIP (exact search)")
+        cpu_index = faiss.IndexFlatIP(dim)
+        cpu_index.add(all_feats)
+        return faiss.index_cpu_to_gpu(res, INF_FAISS_DEVICE, cpu_index)
+
+    if use_ivf:
+        nlist = min(int(np.sqrt(n_samples)), 1024)
+        print(f"[FAISS] CPU mode: IndexIVFFlat (nlist={nlist})")
+        faiss_index = faiss.IndexIVFFlat(
+            faiss.IndexFlatIP(dim),
+            dim,
+            nlist,
+            faiss.METRIC_INNER_PRODUCT,
+        )
+        faiss_index.train(all_feats)
+        faiss_index.add(all_feats)
+        faiss_index.nprobe = min(32, nlist)
+        return faiss_index
+
+    print("[FAISS] CPU mode: IndexFlatIP (exact search)")
+    faiss_index = faiss.IndexFlatIP(dim)
+    faiss_index.add(all_feats)
+    return faiss_index
+
+
 __all__ = [
+    'build_faiss_index',
+    'cityscapes_image_to_gt_path',
     'init_mask_proposer',
     'load_class_mapping',
     'load_class_features',
+    'load_eval_samples',
     'predict_instances',
     'rasterize_instances',
+    'reduce_ade20k_gt_for_eval',
+    'reduce_ade20k_pred_for_eval',
+    'reduce_cityscapes_gt_for_eval',
+    'reduce_cityscapes_pred_for_eval',
 ]
