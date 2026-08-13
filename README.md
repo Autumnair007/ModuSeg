@@ -1,3 +1,5 @@
+
+
 # [ECCV 2026] ModuSeg: Decoupling Object Discovery and Semantic Retrieval for Training-Free Weakly Supervised Segmentation [![arXiv](https://img.shields.io/badge/arXiv-2604.07021-b31b1b.svg)](https://arxiv.org/abs/2604.07021)
 
 ModuSeg has been accepted to ECCV 2026. We propose a training-free weakly supervised semantic segmentation framework that explicitly decouples object discovery and semantic retrieval for high-quality pixel-level predictions.
@@ -78,7 +80,7 @@ python -m pip install 'git+https://github.com/facebookresearch/detectron2.git' -
 
 ```bash
 cd CropFormer/entity_api/PythonAPI
-make
+python setup.py build_ext --inplace
 cd ../../..
 ```
 
