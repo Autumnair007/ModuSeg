@@ -1,10 +1,12 @@
-# [ECCV 2026] ModuSeg: Decoupling Object Discovery and Semantic Retrieval for Training-Free Weakly Supervised Segmentation [![arXiv](https://img.shields.io/badge/arXiv-2604.07021-b31b1b.svg)](https://arxiv.org/abs/2604.07021)
+# [ECCV 2026] ModuSeg: Decoupling Object Discovery and Semantic Retrieval for Training-Free Weakly Supervised Segmentation  [![Springer](https://img.shields.io/badge/Springer-Published%20Paper-005A9C.svg)](https://link.springer.com/chapter/10.1007/978-3-032-37624-4_37)  [![arXiv](https://img.shields.io/badge/arXiv-2604.07021-b31b1b.svg)](https://arxiv.org/abs/2604.07021)
+
 
 ModuSeg has been accepted to ECCV 2026. We propose a training-free weakly supervised semantic segmentation framework that explicitly decouples object discovery and semantic retrieval for high-quality pixel-level predictions.
 
 ## News
 
 * **ModuSeg has been accepted to ECCV 2026.**
+* **The published paper is available on [Springer](https://link.springer.com/chapter/10.1007/978-3-032-37624-4_37).**
 * **If you find this work helpful, please give us a 🌟 to receive updates!**
 
 ## Overview
@@ -407,15 +409,19 @@ Semantic segmentation performance on standard benchmark datasets.
 If you find this work useful for your research, please consider citing:
 
 ```bibtex
-@article{he2026moduseg,
+@inproceedings{he2026moduseg,
   title={ModuSeg: Decoupling Object Discovery and Semantic Retrieval for Training-Free Weakly Supervised Segmentation},
   author={He, Qingze and Liu, Fagui and Zhang, Dengke and Wei, Qingmao and Tang, Quan},
-  journal={arXiv preprint arXiv:2604.07021},
-  year={2026}
+  booktitle={European Conference on Computer Vision},
+  pages={629--646},
+  year={2026},
+  organization={Springer},
+  doi={10.1007/978-3-032-37624-4_37},
+  url={https://link.springer.com/chapter/10.1007/978-3-032-37624-4_37}
 }
 ```
 
-If you have any questions, please feel free to contact the author at 202230430064@mail.scut.edu.cn.
+If you have any questions, please feel free to contact the author at csqzhe@mail.scut.edu.cn.
 
 ---
 
